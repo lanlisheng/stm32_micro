@@ -24,6 +24,8 @@
 #include "rtt_log.h"
 #include <string.h>
 
+#define USART1_TX_QUEUE_SIZE 512U
+
 /*
  * USART1 RX/TX 运行状态及性能统计变量。
  *
@@ -48,6 +50,10 @@ static volatile uint32_t usart1_rx_bytes_acc;
 static volatile uint32_t usart1_tx_bytes_acc;
 static volatile uint32_t usart1_rx_interrupt_count_acc;
 static volatile uint32_t usart1_tx_call_count_acc;
+static uint8_t usart1_tx_queue[USART1_TX_QUEUE_SIZE];
+static volatile uint16_t usart1_tx_head;
+static volatile uint16_t usart1_tx_tail;
+static volatile uint16_t usart1_tx_active_size;
 static uint32_t usart1_cpu_monitor_tick;
 static USART1_CpuStats_t usart1_cpu_stats;
 
@@ -67,6 +73,35 @@ static void USART1_EnableCycleCounter(void) {
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
+static uint16_t USART1_TxQueueAvailable(void) {
+  uint16_t head = usart1_tx_head;
+  uint16_t tail = usart1_tx_tail;
+  return (uint16_t)((tail + USART1_TX_QUEUE_SIZE - head - 1U) % USART1_TX_QUEUE_SIZE);
+}
+
+static uint16_t USART1_TxQueueCount(void) {
+  uint16_t head = usart1_tx_head;
+  uint16_t tail = usart1_tx_tail;
+  return (uint16_t)((head + USART1_TX_QUEUE_SIZE - tail) % USART1_TX_QUEUE_SIZE);
+}
+
+static void USART1_StartTxFromQueue(void) {
+  if (huart1.gState != HAL_UART_STATE_READY) {
+    return;
+  }
+
+  uint16_t count = USART1_TxQueueCount();
+  if (count == 0U) {
+    return;
+  }
+
+  uint16_t contiguous = (usart1_tx_tail < usart1_tx_head)
+                             ? (uint16_t)(usart1_tx_head - usart1_tx_tail)
+                             : (uint16_t)(USART1_TX_QUEUE_SIZE - usart1_tx_tail);
+  usart1_tx_active_size = contiguous;
+  (void)HAL_UART_Transmit_IT(&huart1, &usart1_tx_queue[usart1_tx_tail], contiguous);
+}
+
 /*
  * 将经过的时间窗口（毫秒）转换为等效的 CPU 周期数，
  * 使用当前 HCLK 频率计算。
@@ -82,22 +117,47 @@ static uint32_t USART1_GetWindowCycles(uint32_t elapsed_ms) {
  * 通过 USART1 发送一段字节数据。
  * 如果启用 profile_tx，则会测量本次发送耗时并累加到性能统计中。
  */
-static void USART1_TransmitBytes(const uint8_t *data, uint16_t length,
-                                 uint8_t profile_tx) {
+static HAL_StatusTypeDef USART1_TransmitBytes(const uint8_t *data,
+                                              uint16_t length,
+                                              uint8_t profile_tx) {
   uint32_t start_cycles;
+  uint32_t primask;
+  uint16_t i;
+  uint16_t free_space;
 
   if ((data == NULL) || (length == 0U)) {
-    return;
+    return HAL_ERROR;
   }
 
-  start_cycles = USART1_GetCycleCount();
-  (void)HAL_UART_Transmit(&huart1, (uint8_t *)data, length, HAL_MAX_DELAY);
+  primask = __get_PRIMASK();
+  __disable_irq();
+  free_space = USART1_TxQueueAvailable();
+  if (length > free_space) {
+    __set_PRIMASK(primask);
+    return HAL_BUSY;
+  }
+
+  for (i = 0U; i < length; i++) {
+    usart1_tx_queue[usart1_tx_head] = data[i];
+    usart1_tx_head = (uint16_t)((usart1_tx_head + 1U) % USART1_TX_QUEUE_SIZE);
+  }
 
   if (profile_tx != 0U) {
-    usart1_tx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
     usart1_tx_bytes_acc += length;
     usart1_tx_call_count_acc++;
   }
+
+  __set_PRIMASK(primask);
+
+  if (profile_tx != 0U) {
+    start_cycles = USART1_GetCycleCount();
+    USART1_StartTxFromQueue();
+    usart1_tx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
+  } else {
+    USART1_StartTxFromQueue();
+  }
+
+  return HAL_OK;
 }
 
 /*
@@ -253,6 +313,16 @@ HAL_StatusTypeDef USART1_StartReceiveIT(void) {
   return HAL_UART_Receive_IT(&huart1, &usart1_rx_byte, 1U);
 }
 
+void USART1_Init(void) {
+  MX_USART1_UART_Init();
+  USART1_CpuMonitorInit();
+  (void)USART1_StartReceiveIT();
+}
+
+void comInit(void) {
+  USART1_Init();
+}
+
 /*
  * 初始化 USART1 的 CPU 监测。
  * 启用周期计数器并重置统计数据，开始新的监测窗口。
@@ -292,22 +362,71 @@ void USART1_Process(void) {
 HAL_StatusTypeDef USART1_SendString(const char *str) {
   HAL_StatusTypeDef status = HAL_OK;
   uint16_t length;
-  uint32_t start_cycles;
 
   if (str == NULL) {
     return HAL_ERROR;
   }
 
   length = (uint16_t)strlen(str);
-  start_cycles = USART1_GetCycleCount();
-  status = HAL_UART_Transmit(&huart1, (uint8_t *)str, length, HAL_MAX_DELAY);
-  if (status == HAL_OK) {
-    usart1_tx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
-    usart1_tx_bytes_acc += length;
-    usart1_tx_call_count_acc++;
+  status = USART1_TransmitBytes((const uint8_t *)str, length, 1U);
+  return status;
+}
+
+HAL_StatusTypeDef USART1_Send(const uint8_t *data, uint16_t length) {
+  return USART1_TransmitBytes(data, length, 1U);
+}
+
+HAL_StatusTypeDef USART1_Receive(uint8_t *data, uint16_t max_length, uint16_t *received_length) {
+  if ((data == NULL) || (received_length == NULL) || (max_length == 0U)) {
+    return HAL_ERROR;
   }
 
-  return status;
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  *received_length = USART1_RingBufferPop(data, max_length);
+  __set_PRIMASK(primask);
+
+  return HAL_OK;
+}
+
+HAL_StatusTypeDef UART_SendBuf(const uint8_t *data, uint16_t length) {
+  return USART1_Send(data, length);
+}
+
+HAL_StatusTypeDef comSendBuf(const uint8_t *data, uint16_t length) {
+  return UART_SendBuf(data, length);
+}
+
+void comSendChar(uint8_t ch) {
+  (void)UART_SendBuf(&ch, 1);
+}
+
+uint16_t UART_GetChar(uint8_t *data, uint16_t max_length) {
+  uint16_t received = 0;
+
+  if (USART1_Receive(data, max_length, &received) != HAL_OK) {
+    return 0;
+  }
+
+  return received;
+}
+
+uint16_t comGetChar(uint8_t *data, uint16_t max_length) {
+  return UART_GetChar(data, max_length);
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) {
+    uint32_t start_cycles = USART1_GetCycleCount();
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    usart1_tx_tail = (uint16_t)((usart1_tx_tail + usart1_tx_active_size) % USART1_TX_QUEUE_SIZE);
+    __set_PRIMASK(primask);
+
+    USART1_StartTxFromQueue();
+    usart1_tx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
+  }
 }
 
 /*
@@ -377,6 +496,20 @@ void USART1_CpuMonitorTask(void) {
   usart1_cpu_stats.rx_cpu_percent = (float)rx_cpu_permille / 10.0f;
   usart1_cpu_stats.tx_cpu_percent = (float)tx_cpu_permille / 10.0f;
   usart1_cpu_stats.total_cpu_percent = (float)total_cpu_permille / 10.0f;
+  /*
+   * RTT 日志说明:
+   * - window_ms: 本次统计窗口的时长，单位毫秒
+   * - rx_bytes: 本窗口内 USART1 接收的字节总数
+   * - rx_interrupt_count: 本窗口内 USART1 接收中断触发次数
+   * - rx_cpu_permille / 10U: USART1 接收处理占用的 CPU 百分比整数部分
+   * - rx_cpu_permille % 10U: USART1 接收处理占用的 CPU 百分比小数部分（1/10）
+   * - tx_bytes: 本窗口内 USART1 发送的字节总数
+   * - tx_call_count: 本窗口内 USART1 发送调用次数
+   * - tx_cpu_permille / 10U: USART1 发送处理占用的 CPU 百分比整数部分
+   * - tx_cpu_permille % 10U: USART1 发送处理占用的 CPU 百分比小数部分（1/10）
+   * - total_cpu_permille / 10U: 本窗口内 USART1 总共占用的 CPU 百分比整数部分
+   * - total_cpu_permille % 10U: 本窗口内 USART1 总共占用的 CPU 百分比小数部分（1/10）
+   */
   RTT_LogPrintf("[USART1 CPU %lums] RX:%luB/%luIRQ %lu.%01lu%%, "
                 "TX:%luB/%luCall %lu.%01lu%%, TOTAL:%lu.%01lu%%\r\n",
                 usart1_cpu_stats.window_ms, usart1_cpu_stats.rx_bytes,

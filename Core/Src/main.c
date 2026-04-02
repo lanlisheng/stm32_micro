@@ -97,13 +97,8 @@ int main(void) {
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  USART1_CpuMonitorInit();
-
-  if (USART1_StartReceiveIT() != HAL_OK) {
-    Error_Handler();
-  }
+  comInit();
 
   // if (USART1_SendString("\r\nUSART1 echo test ready.\r\nSend any data from
   // PC, MCU will echo it back.\r\n") != HAL_OK)

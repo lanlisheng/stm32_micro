@@ -59,8 +59,17 @@ void MX_USART1_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 HAL_StatusTypeDef USART1_StartReceiveIT(void);
+void USART1_Init(void);
+void comInit(void);
 void USART1_Process(void);
 HAL_StatusTypeDef USART1_SendString(const char *str);
+HAL_StatusTypeDef USART1_Send(const uint8_t *data, uint16_t length);
+HAL_StatusTypeDef USART1_Receive(uint8_t *data, uint16_t max_length, uint16_t *received_length);
+HAL_StatusTypeDef UART_SendBuf(const uint8_t *data, uint16_t length);
+HAL_StatusTypeDef comSendBuf(const uint8_t *data, uint16_t length);
+void comSendChar(uint8_t ch);
+uint16_t UART_GetChar(uint8_t *data, uint16_t max_length);
+uint16_t comGetChar(uint8_t *data, uint16_t max_length);
 void USART1_CpuMonitorInit(void);
 void USART1_CpuMonitorTask(void);
 
