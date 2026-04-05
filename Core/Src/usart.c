@@ -23,21 +23,87 @@
 /* USER CODE BEGIN 0 */
 #include "rtt_log.h"
 #include <string.h>
+#include "stdint.h"
+#include "fifo.h"
+
+// UART DMA MODE
+/* ´®¿ÚÉè±¸Êý¾Ý½á¹¹ */
+typedef struct
+{
+    uint8_t status;           /* ·¢ËÍ×´??*/
+    _fifo_t tx_fifo;          /* ·¢ËÍfifo */
+    _fifo_t rx_fifo;          /* ½ÓÊÕfifo */
+    uint8_t *dmarx_buf;       /* dma½ÓÊÕ»º´æ */
+    uint16_t dmarx_buf_size;  /* dma½ÓÊÕ»º´æ´óÐ¡*/
+    uint8_t *dmatx_buf;       /* dma·¢ËÍ»º??*/
+    uint16_t dmatx_buf_size;  /* dma·¢ËÍ»º´æ´ó??*/
+    uint16_t last_dmarx_size; /* dmaÉÏÒ»´Î½ÓÊÕÊý¾Ý´ó??*/
+} uart_device_t;
+
+/* ´®¿Ú»º´æ´óÐ¡ */
+#define UART1_TX_BUF_SIZE 4096
+#define UART1_RX_BUF_SIZE 4096
+#define UART1_DMA_RX_BUF_SIZE 512
+#define UART1_DMA_TX_BUF_SIZE 512
+
+/* ´®¿Ú»º´æ */
+static uint8_t s_uart1_tx_buf[UART1_TX_BUF_SIZE];
+static uint8_t s_uart1_rx_buf[UART1_RX_BUF_SIZE];
+static uint8_t s_uart1_dmarx_buf[UART1_DMA_RX_BUF_SIZE];
+static uint8_t s_uart1_dmatx_buf[UART1_DMA_TX_BUF_SIZE];
+
+/* ´®¿ÚÉè±¸ÊµÀý */
+static uart_device_t s_uart_dev[2] = {0};
+
+/* ²âÊÔ */
+uint32_t s_UartTxRxCount[4] = {0};
+
+/* fifoÉÏËøº¯Êý */
+static void fifo_lock(void)
+{
+    __disable_irq();
+}
+
+/* fifo½âËøº¯Êý */
+static void fifo_unlock(void)
+{
+    __enable_irq();
+}
+
+/**
+ * @brief  ´®¿Ú·¢ËÍÊý¾Ý½Ó¿Ú£¬Êµ¼ÊÊÇÐ´Èë·¢ËÍfifo£¬·¢ËÍÓÉdma´¦Àí
+ * @param
+ * @retval
+ */
+uint16_t uart_write(uint8_t uart_id, const uint8_t *buf, uint16_t size)
+{
+    return fifo_write(&s_uart_dev[uart_id].tx_fifo, buf, size);
+}
+
+/**
+ * @brief  ´®¿Ú¶ÁÈ¡Êý¾Ý½Ó¿Ú£¬Êµ¼ÊÊÇ´Ó½ÓÊÕfifo¶ÁÈ¡
+ * @param
+ * @retval
+ */
+uint16_t uart_read(uint8_t uart_id, uint8_t *buf, uint16_t size)
+{
+    return fifo_read(&s_uart_dev[uart_id].rx_fifo, buf, size);
+}
 
 #define USART1_TX_QUEUE_SIZE 512U
 
 /*
- * USART1 RX/TX è¿è¡ŒçŠ¶ï¿½?ï¿½åŠæ€§èƒ½ç»Ÿè®¡å˜é‡ï¿½?
+ * USART1 RX/TX ÔËÐÐ×´???¼°ÐÔÄÜÍ³¼Æ±äÁ¿??
  *
- * çŽ¯å½¢ç¼“å†²åŒºé‡‡ç”¨å¾ªï¿½? FIFO æ–¹å¼ç®¡ç†ï¿½?
- * - usart1_rx_byteï¼šä¿å­˜ä¸­æ–­æŽ¥æ”¶çš„ï¿½?æ–°ä¸€å­—èŠ‚ï¿½?
- * - usart1_rx_bufferï¼šUSART1 æŽ¥æ”¶æ•°æ®çš„çŽ¯å½¢ç¼“å†²åŒºï¿½?
- * - usart1_rx_headï¼šçŽ¯å½¢ç¼“å†²åŒºçš„ä¸‹ï¿½?ä¸ªå†™å…¥ä½ç½®ï¿½??
- * - usart1_rx_tailï¼šçŽ¯å½¢ç¼“å†²åŒºçš„ä¸‹ï¿½?ä¸ªè¯»å–ä½ç½®ï¿½??
- * - usart1_rx_overflowï¼šç¼“å†²åŒºæ»¡æ—¶ä¸¢å¼ƒæ•°æ®å¹¶ç½®ä½è¯¥æ ‡å¿—ï¿½?
+ * »·ÐÎ»º³åÇø²ÉÓÃÑ­?? FIFO ·½Ê½¹ÜÀí??
+ * - usart1_rx_byte£º±£´æÖÐ¶Ï½ÓÊÕµÄ??ÐÂÒ»×Ö½Ú??
+ * - usart1_rx_buffer£ºUSART1 ½ÓÊÕÊý¾ÝµÄ»·ÐÎ»º³åÇø??
+ * - usart1_rx_head£º»·ÐÎ»º³åÇøµÄÏÂ??¸öÐ´ÈëÎ»ÖÃ???
+ * - usart1_rx_tail£º»·ÐÎ»º³åÇøµÄÏÂ??¸ö¶ÁÈ¡Î»ÖÃ???
+ * - usart1_rx_overflow£º»º³åÇøÂúÊ±¶ªÆúÊý¾Ý²¢ÖÃÎ»¸Ã±êÖ¾??
  *
- * æ€§èƒ½ç»Ÿè®¡ç´¯åŠ å™¨ç”¨äºŽè®°ï¿½? RX/TX ï¿½? CPU å‘¨æœŸã€å­—èŠ‚æ•°å’Œè°ƒç”¨æ¬¡æ•°ï¼Œ
- * ä¾¿äºŽè®¡ç®—å’Œè¾“ï¿½? CPU å ç”¨æƒ…å†µï¿½?
+ * ÐÔÄÜÍ³¼ÆÀÛ¼ÓÆ÷ÓÃÓÚ¼Ç?? RX/TX ?? CPU ÖÜÆÚ¡¢×Ö½ÚÊýºÍµ÷ÓÃ´ÎÊý£¬
+ * ±ãÓÚ¼ÆËãºÍÊä?? CPU Õ¼ÓÃÇé¿ö??
  */
 static uint8_t usart1_rx_byte;
 static uint8_t usart1_rx_buffer[USART1_RX_BUFFER_SIZE];
@@ -58,14 +124,14 @@ static uint32_t usart1_cpu_monitor_tick;
 static USART1_CpuStats_t usart1_cpu_stats;
 
 /*
- * è¯»å–å½“å‰ DWT å‘¨æœŸè®¡æ•°å™¨ï¿½??
- * è¯¥è®¡æ•°å™¨éšæ¯ï¿½? CPU æ—¶é’Ÿå‘¨æœŸé€’å¢žï¼Œç”¨ï¿½? USART TX/RX æ€§èƒ½ç»Ÿè®¡ï¿½?
+ * ¶ÁÈ¡µ±Ç° DWT ÖÜÆÚ¼ÆÊýÆ÷???
+ * ¸Ã¼ÆÊýÆ÷ËæÃ¿?? CPU Ê±ÖÓÖÜÆÚµÝÔö£¬ÓÃ?? USART TX/RX ÐÔÄÜÍ³¼Æ??
  */
 static uint32_t USART1_GetCycleCount(void) { return DWT->CYCCNT; }
 
 /*
- * å¯ç”¨ DWT å‘¨æœŸè®¡æ•°å™¨å¹¶é‡ç½®è®¡æ•°å€¼ï¿½??
- * å¿…é¡»å…ˆï¿½?ï¿½è¿‡ CoreDebug ä½¿èƒ½ DWT å•å…ƒï¼Œè®¡æ•°å™¨æ‰èƒ½è¿è¡Œï¿½?
+ * ÆôÓÃ DWT ÖÜÆÚ¼ÆÊýÆ÷²¢ÖØÖÃ¼ÆÊýÖµ???
+ * ±ØÐëÏÈ???¹ý CoreDebug Ê¹ÄÜ DWT µ¥Ôª£¬¼ÆÊýÆ÷²ÅÄÜÔËÐÐ??
  */
 static void USART1_EnableCycleCounter(void)
 {
@@ -109,9 +175,9 @@ static void USART1_StartTxFromQueue(void)
 }
 
 /*
- * å°†ç»è¿‡çš„æ—¶é—´çª—å£ï¼ˆæ¯«ç§’ï¼‰è½¬æ¢ä¸ºç­‰æ•ˆçš„ CPU å‘¨æœŸæ•°ï¼Œ
- * ä½¿ç”¨å½“å‰ HCLK é¢‘çŽ‡è®¡ç®—ï¿½?
- * è¯¥ï¿½?ï¿½ç”¨äºŽè®¡ï¿½? USART æ´»åŠ¨ï¿½? CPU ä½¿ç”¨çŽ‡ï¿½??
+ * ½«¾­¹ýµÄÊ±¼ä´°¿Ú£¨ºÁÃë£©×ª»»ÎªµÈÐ§µÄ CPU ÖÜÆÚÊý£¬
+ * Ê¹ÓÃµ±Ç° HCLK ÆµÂÊ¼ÆËã??
+ * ¸Ã???ÓÃÓÚ¼Æ?? USART »î¶¯?? CPU Ê¹ÓÃÂÊ???
  */
 static uint32_t USART1_GetWindowCycles(uint32_t elapsed_ms)
 {
@@ -121,8 +187,8 @@ static uint32_t USART1_GetWindowCycles(uint32_t elapsed_ms)
 }
 
 /*
- * é€šè¿‡ USART1 å‘ï¿½?ï¿½ä¸€æ®µå­—èŠ‚æ•°æ®ï¿½??
- * å¦‚æžœå¯ç”¨ profile_txï¼Œåˆ™ä¼šæµ‹é‡æœ¬æ¬¡å‘é€ï¿½?ï¿½æ—¶å¹¶ç´¯åŠ åˆ°æ€§èƒ½ç»Ÿè®¡ä¸­ï¿½??
+ * Í¨¹ý USART1 ·¢???Ò»¶Î×Ö½ÚÊý¾Ý???
+ * Èç¹ûÆôÓÃ profile_tx£¬Ôò»á²âÁ¿±¾´Î·¢ËÍ???Ê±²¢ÀÛ¼Óµ½ÐÔÄÜÍ³¼ÆÖÐ???
  */
 static HAL_StatusTypeDef USART1_TransmitBytes(const uint8_t *data,
                                               uint16_t length,
@@ -176,8 +242,8 @@ static HAL_StatusTypeDef USART1_TransmitBytes(const uint8_t *data,
 }
 
 /*
- * å°†æŽ¥æ”¶åˆ°çš„ä¸€å­—èŠ‚æŽ¨å…¥ USART1 RX çŽ¯å½¢ç¼“å†²åŒºï¿½??
- * å¦‚æžœç¼“å†²åŒºå·²æ»¡ï¼Œåˆ™è®¾ç½®æº¢å‡ºæ ‡å¿—å¹¶ä¸¢å¼ƒè¯¥å­—èŠ‚ï¿½??
+ * ½«½ÓÊÕµ½µÄÒ»×Ö½ÚÍÆÈë USART1 RX »·ÐÎ»º³åÇø???
+ * Èç¹û»º³åÇøÒÑÂú£¬ÔòÉèÖÃÒç³ö±êÖ¾²¢¶ªÆú¸Ã×Ö½Ú???
  */
 static void USART1_RingBufferPush(uint8_t data)
 {
@@ -195,8 +261,8 @@ static void USART1_RingBufferPush(uint8_t data)
 }
 
 /*
- * ï¿½? USART1 RX çŽ¯å½¢ç¼“å†²åŒºè¯»å–æœ€ï¿½? max_len å­—èŠ‚åˆ°ç›®æ ‡ç¼“å†²åŒºä¸­ï¿½??
- * è¿”å›žä»Žç¼“å†²åŒºä¸­è¯»å–çš„å­—èŠ‚æ•°ï¿½??
+ * ?? USART1 RX »·ÐÎ»º³åÇø¶ÁÈ¡×î?? max_len ×Ö½Úµ½Ä¿±ê»º³åÇøÖÐ???
+ * ·µ»Ø´Ó»º³åÇøÖÐ¶ÁÈ¡µÄ×Ö½ÚÊý???
  */
 static uint16_t USART1_RingBufferPop(uint8_t *data, uint16_t max_len)
 {
@@ -258,7 +324,20 @@ void MX_USART1_UART_Init(void)
         Error_Handler();
     }
     /* USER CODE BEGIN USART1_Init 2 */
-
+    /* ÅäÖÃ´®¿Ú1ÊÕ·¢fifo */
+    fifo_register(&s_uart_dev[0].tx_fifo, &s_uart1_tx_buf[0],
+                  sizeof(s_uart1_tx_buf), NULL, NULL);
+    fifo_register(&s_uart_dev[0].rx_fifo, &s_uart1_rx_buf[0],
+                  sizeof(s_uart1_rx_buf), fifo_lock, fifo_unlock);
+    /* ÅäÖÃ´®¿Ú1 DMAÊÕ·¢buf */
+    s_uart_dev[0].dmarx_buf = &s_uart1_dmarx_buf[0];
+    s_uart_dev[0].dmarx_buf_size = sizeof(s_uart1_dmarx_buf);
+    s_uart_dev[0].dmatx_buf = &s_uart1_dmatx_buf[0];
+    s_uart_dev[0].dmatx_buf_size = sizeof(s_uart1_dmatx_buf);
+    /* Ö»ÐèÅäÖÃ½ÓÊÕÄ£Ê½DMA£¬·¢ËÍÄ£Ê½Ðè·¢ËÍÊý¾ÝÊ±²ÅÅä??*/
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, s_uart_dev[0].dmarx_buf,
+                                 sizeof(s_uart1_dmarx_buf));
+    s_uart_dev[0].status = 0;
     /* USER CODE END USART1_Init 2 */
 }
 
@@ -374,10 +453,10 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *uartHandle)
 
 /* USER CODE BEGIN 1 */
 /*
- * USART1 ç”¨æˆ·å›žè°ƒä¸Žè¾…ï¿½? APIï¿½?
+ * USART1 ÓÃ»§»Øµ÷Óë¸¨?? API??
  *
- * æœ¬èŠ‚åŒ…å«é©±åŠ¨ä¸­æ–­æŽ¥æ”¶æµç¨‹ã€å›žæ˜¾æŽ¥æ”¶æ•°æ®ï¿½?ï¿½ä»¥åŠè®¡ï¿½? CPU ä½¿ç”¨çŽ‡çš„
- * ç”¨æˆ·è‡ªå®šä¹‰æ“ä½œï¿½??
+ * ±¾½Ú°üº¬Çý¶¯ÖÐ¶Ï½ÓÊÕÁ÷³Ì¡¢»ØÏÔ½ÓÊÕÊý¾Ý???ÒÔ¼°¼Æ?? CPU Ê¹ÓÃÂÊµÄ
+ * ÓÃ»§×Ô¶¨Òå²Ù×÷???
  */
 HAL_StatusTypeDef USART1_StartReceiveIT(void)
 {
@@ -397,8 +476,8 @@ void comInit(void)
 }
 
 /*
- * åˆå§‹ï¿½? USART1 ï¿½? CPU ç›‘æµ‹ï¿½?
- * å¯ç”¨å‘¨æœŸè®¡æ•°å™¨å¹¶é‡ç½®ç»Ÿè®¡æ•°æ®ï¼Œå¼€å§‹æ–°çš„ç›‘æµ‹çª—å£ï¿½??
+ * ³õÊ¼?? USART1 ?? CPU ¼à²â??
+ * ÆôÓÃÖÜÆÚ¼ÆÊýÆ÷²¢ÖØÖÃÍ³¼ÆÊý¾Ý£¬¿ªÊ¼ÐÂµÄ¼à²â´°¿Ú???
  */
 void USART1_CpuMonitorInit(void)
 {
@@ -408,8 +487,8 @@ void USART1_CpuMonitorInit(void)
 }
 
 /*
- * è½®è¯¢å®‰å…¨çš„å¤„ç†å‡½æ•°ï¿½??
- * å¤„ç† RX ç¼“å†²åŒºæº¢å‡ºæç¤ºï¼Œå¹¶å°†æŽ¥æ”¶åˆ°çš„æ•°æ®å›žæ˜¾å›žå‘é€ç«¯ï¿½?
+ * ÂÖÑ¯°²È«µÄ´¦Àíº¯Êý???
+ * ´¦Àí RX »º³åÇøÒç³öÌáÊ¾£¬²¢½«½ÓÊÕµ½µÄÊý¾Ý»ØÏÔ»Ø·¢ËÍ¶Ë??
  */
 void USART1_Process(void)
 {
@@ -433,8 +512,8 @@ void USART1_Process(void)
 }
 
 /*
- * é€šè¿‡ USART1 å‘ï¿½?ï¿½ä¸€ä¸ªä»¥ NUL ç»“å°¾çš„å­—ç¬¦ä¸²ï¿½?
- * åªæœ‰å‘ï¿½?ï¿½æˆåŠŸæ—¶ï¼Œæ‰å°†ï¿½?ï¿½æ—¶ç´¯åŠ åˆ°ï¿½?ï¿½èƒ½ç»Ÿè®¡ä¸­ï¿½??
+ * Í¨¹ý USART1 ·¢???Ò»¸öÒÔ NUL ½áÎ²µÄ×Ö·û´®??
+ * Ö»ÓÐ·¢???³É¹¦Ê±£¬²Å½«???Ê±ÀÛ¼Óµ½???ÄÜÍ³¼ÆÖÐ???
  */
 HAL_StatusTypeDef USART1_SendString(const char *str)
 {
@@ -503,25 +582,25 @@ uint16_t comGetChar(uint8_t *data, uint16_t max_length)
     return UART_GetChar(data, max_length);
 }
 
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1)
-    {
-        uint32_t start_cycles = USART1_GetCycleCount();
-        uint32_t primask = __get_PRIMASK();
+// void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+// {
+//     if (huart->Instance == USART1)
+//     {
+//         uint32_t start_cycles = USART1_GetCycleCount();
+//         uint32_t primask = __get_PRIMASK();
 
-        __disable_irq();
-        usart1_tx_tail = (uint16_t)((usart1_tx_tail + usart1_tx_active_size) % USART1_TX_QUEUE_SIZE);
-        __set_PRIMASK(primask);
+//         __disable_irq();
+//         usart1_tx_tail = (uint16_t)((usart1_tx_tail + usart1_tx_active_size) % USART1_TX_QUEUE_SIZE);
+//         __set_PRIMASK(primask);
 
-        USART1_StartTxFromQueue();
-        usart1_tx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
-    }
-}
+//         USART1_StartTxFromQueue();
+//         usart1_tx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
+//     }
+// }
 
 /*
- * USART1 çš„å‘¨æœŸï¿½?? CPU ç›‘æµ‹ä»»åŠ¡ï¿½?
- * åœ¨ä¸­æ–­ä¿æŠ¤ä¸‹å¤åˆ¶ç»Ÿè®¡è®¡æ•°ï¼Œè®¡ï¿½? CPU ä½¿ç”¨çŽ‡ç™¾åˆ†æ¯”ï¼Œå¹¶é€šè¿‡ RTT æ‰“å°æ—¥å¿—ï¿½?
+ * USART1 µÄÖÜÆÚ??? CPU ¼à²âÈÎÎñ??
+ * ÔÚÖÐ¶Ï±£»¤ÏÂ¸´ÖÆÍ³¼Æ¼ÆÊý£¬¼Æ?? CPU Ê¹ÓÃÂÊ°Ù·Ö±È£¬²¢Í¨¹ý RTT ´òÓ¡ÈÕÖ¾??
  */
 void USART1_CpuMonitorTask(void)
 {
@@ -589,18 +668,18 @@ void USART1_CpuMonitorTask(void)
     usart1_cpu_stats.tx_cpu_percent = (float)tx_cpu_permille / 10.0f;
     usart1_cpu_stats.total_cpu_percent = (float)total_cpu_permille / 10.0f;
     /*
-     * RTT æ—¥å¿—è¯´æ˜Ž:
-     * - window_ms: æœ¬æ¬¡ç»Ÿè®¡çª—å£çš„æ—¶é•¿ï¼Œå•ä½æ¯«ç§’
-     * - rx_bytes: æœ¬çª—å£å†… USART1 æŽ¥æ”¶çš„å­—èŠ‚ï¿½?ï¿½æ•°
-     * - rx_interrupt_count: æœ¬çª—å£å†… USART1 æŽ¥æ”¶ä¸­æ–­è§¦å‘æ¬¡æ•°
-     * - rx_cpu_permille / 10U: USART1 æŽ¥æ”¶å¤„ç†å ç”¨ï¿½? CPU ç™¾åˆ†æ¯”æ•´æ•°éƒ¨ï¿½?
-     * - rx_cpu_permille % 10U: USART1 æŽ¥æ”¶å¤„ç†å ç”¨ï¿½? CPU ç™¾åˆ†æ¯”å°æ•°éƒ¨åˆ†ï¼ˆ1/10ï¿½?
-     * - tx_bytes: æœ¬çª—å£å†… USART1 å‘ï¿½?ï¿½çš„å­—èŠ‚æ€»æ•°
-     * - tx_call_count: æœ¬çª—å£å†… USART1 å‘ï¿½?ï¿½è°ƒç”¨æ¬¡ï¿½?
-     * - tx_cpu_permille / 10U: USART1 å‘ï¿½?ï¿½å¤„ç†å ç”¨çš„ CPU ç™¾åˆ†æ¯”æ•´æ•°éƒ¨ï¿½?
-     * - tx_cpu_permille % 10U: USART1 å‘ï¿½?ï¿½å¤„ç†å ç”¨çš„ CPU ç™¾åˆ†æ¯”å°æ•°éƒ¨åˆ†ï¼ˆ1/10ï¿½?
-     * - total_cpu_permille / 10U: æœ¬çª—å£å†… USART1 æ€»å…±å ç”¨ï¿½? CPU ç™¾åˆ†æ¯”æ•´æ•°éƒ¨ï¿½?
-     * - total_cpu_permille % 10U: æœ¬çª—å£å†… USART1 æ€»å…±å ç”¨ï¿½? CPU ç™¾åˆ†æ¯”å°æ•°éƒ¨åˆ†ï¼ˆ1/10ï¿½?
+     * RTT ÈÕÖ¾ËµÃ÷:
+     * - window_ms: ±¾´ÎÍ³¼Æ´°¿ÚµÄÊ±³¤£¬µ¥Î»ºÁÃë
+     * - rx_bytes: ±¾´°¿ÚÄÚ USART1 ½ÓÊÕµÄ×Ö½Ú???Êý
+     * - rx_interrupt_count: ±¾´°¿ÚÄÚ USART1 ½ÓÊÕÖÐ¶Ï´¥·¢´ÎÊý
+     * - rx_cpu_permille / 10U: USART1 ½ÓÊÕ´¦ÀíÕ¼ÓÃ?? CPU °Ù·Ö±ÈÕûÊý²¿??
+     * - rx_cpu_permille % 10U: USART1 ½ÓÊÕ´¦ÀíÕ¼ÓÃ?? CPU °Ù·Ö±ÈÐ¡Êý²¿·Ö£¨1/10??
+     * - tx_bytes: ±¾´°¿ÚÄÚ USART1 ·¢???µÄ×Ö½Ú×ÜÊý
+     * - tx_call_count: ±¾´°¿ÚÄÚ USART1 ·¢???µ÷ÓÃ´Î??
+     * - tx_cpu_permille / 10U: USART1 ·¢???´¦ÀíÕ¼ÓÃµÄ CPU °Ù·Ö±ÈÕûÊý²¿??
+     * - tx_cpu_permille % 10U: USART1 ·¢???´¦ÀíÕ¼ÓÃµÄ CPU °Ù·Ö±ÈÐ¡Êý²¿·Ö£¨1/10??
+     * - total_cpu_permille / 10U: ±¾´°¿ÚÄÚ USART1 ×Ü¹²Õ¼ÓÃ?? CPU °Ù·Ö±ÈÕûÊý²¿??
+     * - total_cpu_permille % 10U: ±¾´°¿ÚÄÚ USART1 ×Ü¹²Õ¼ÓÃ?? CPU °Ù·Ö±ÈÐ¡Êý²¿·Ö£¨1/10??
      */
     RTT_LogPrintf("[USART1 CPU %lums] RX:%luB/%luIRQ %lu.%01lu%%, "
                   "TX:%luB/%luCall %lu.%01lu%%, TOTAL:%lu.%01lu%%\r\n",
@@ -613,26 +692,26 @@ void USART1_CpuMonitorTask(void)
 }
 
 /*
- * USART1 æŽ¥æ”¶å®Œæˆä¸­æ–­ï¿½? HAL å›žè°ƒï¿½?
- * å°†æŽ¥æ”¶å­—èŠ‚æŽ¨å…¥æœ¬åœ°çŽ¯å½¢ç¼“å†²åŒºï¼Œå¹¶ç«‹å³é‡å¯ä¸‹ä¸€æ¬¡ä¸­æ–­æŽ¥æ”¶ï¿½??
+ * USART1 ½ÓÊÕÍê³ÉÖÐ¶Ï?? HAL »Øµ÷??
+ * ½«½ÓÊÕ×Ö½ÚÍÆÈë±¾µØ»·ÐÎ»º³åÇø£¬²¢Á¢¼´ÖØÆôÏÂÒ»´ÎÖÐ¶Ï½ÓÊÕ???
  */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1)
-    {
-        uint32_t start_cycles = USART1_GetCycleCount();
+// void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+// {
+//     if (huart->Instance == USART1)
+//     {
+//         uint32_t start_cycles = USART1_GetCycleCount();
 
-        USART1_RingBufferPush(usart1_rx_byte);
-        (void)HAL_UART_Receive_IT(&huart1, &usart1_rx_byte, 1U);
-        usart1_rx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
-        usart1_rx_bytes_acc++;
-        usart1_rx_interrupt_count_acc++;
-    }
-}
+//         USART1_RingBufferPush(usart1_rx_byte);
+//         (void)HAL_UART_Receive_IT(&huart1, &usart1_rx_byte, 1U);
+//         usart1_rx_cycles_acc += (USART1_GetCycleCount() - start_cycles);
+//         usart1_rx_bytes_acc++;
+//         usart1_rx_interrupt_count_acc++;
+//     }
+// }
 
 /*
- * USART1 é”™è¯¯æ¡ä»¶ï¿½? HAL å›žè°ƒï¿½?
- * æ¸…é™¤å¸¸è§ UART é”™è¯¯æ ‡å¿—ï¼Œå¹¶é‡å¯ä¸­æ–­æŽ¥æ”¶ä»¥ä¾¿è‡ªåŠ¨æ¢å¤ï¿½?
+ * USART1 ´íÎóÌõ¼þ?? HAL »Øµ÷??
+ * Çå³ý³£¼û UART ´íÎó±êÖ¾£¬²¢ÖØÆôÖÐ¶Ï½ÓÊÕÒÔ±ã×Ô¶¯»Ö¸´??
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
@@ -642,7 +721,135 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         __HAL_UART_CLEAR_NEFLAG(huart);
         __HAL_UART_CLEAR_FEFLAG(huart);
         __HAL_UART_CLEAR_PEFLAG(huart);
-        (void)HAL_UART_Receive_IT(&huart1, &usart1_rx_byte, 1U);
+        s_uart_dev[0].last_dmarx_size = 0U;
+        (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1,
+                                           s_uart_dev[0].dmarx_buf,
+                                           s_uart_dev[0].dmarx_buf_size);
+    }
+}
+
+/**
+ * @brief  ´®¿Údma½ÓÊÕÍê³ÉÖÐ¶Ï´¦Àí
+ * @param
+ * @retval
+ */
+void uart_dmarx_done_isr(uint8_t uart_id)
+{
+    uint16_t recv_size;
+
+    recv_size = s_uart_dev[uart_id].dmarx_buf_size - s_uart_dev[uart_id].last_dmarx_size;
+    s_UartTxRxCount[uart_id * 2 + 1] += recv_size;
+    fifo_write(&s_uart_dev[uart_id].rx_fifo,
+               (const uint8_t *)&(s_uart_dev[uart_id].dmarx_buf[s_uart_dev[uart_id].last_dmarx_size]), recv_size);
+
+    s_uart_dev[uart_id].last_dmarx_size = 0;
+}
+
+/**
+ * @brief  ´®¿Údma½ÓÊÕ»º´æ´óÐ¡Ò»°ëÊý¾ÝÖÐ¶Ï´¦??
+ * @param
+ * @retval
+ */
+void uart_dmarx_half_done_isr(uint8_t uart_id)
+{
+    uint16_t recv_total_size;
+    uint16_t recv_size;
+
+    if (uart_id == 0)
+    {
+        recv_total_size = s_uart_dev[uart_id].dmarx_buf_size - __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
+    }
+    else if (uart_id == 1)
+    {
+        // recv_total_size = s_uart_dev[uart_id].dmarx_buf_size - bsp_uart2_get_dmarx_buf_remain_size();
+    }
+    recv_size = recv_total_size - s_uart_dev[uart_id].last_dmarx_size;
+    s_UartTxRxCount[uart_id * 2 + 1] += recv_size;
+
+    fifo_write(&s_uart_dev[uart_id].rx_fifo,
+               (const uint8_t *)&(s_uart_dev[uart_id].dmarx_buf[s_uart_dev[uart_id].last_dmarx_size]), recv_size);
+    s_uart_dev[uart_id].last_dmarx_size = recv_total_size;
+}
+
+/**
+ * @brief  ´®¿Ú¿ÕÏÐÖÐ¶Ï´¦Àí
+ * @param
+ * @retval
+ */
+void uart_dmarx_idle_isr(uint8_t uart_id)
+{
+    uint16_t recv_total_size;
+    uint16_t recv_size;
+
+    if (uart_id == 0)
+    {
+        recv_total_size = s_uart_dev[uart_id].dmarx_buf_size - __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
+    }
+    else if (uart_id == 1)
+    {
+        // recv_total_size = s_uart_dev[uart_id].dmarx_buf_size - bsp_uart2_get_dmarx_buf_remain_size();
+    }
+    recv_size = recv_total_size - s_uart_dev[uart_id].last_dmarx_size;
+    s_UartTxRxCount[uart_id * 2 + 1] += recv_size;
+    fifo_write(&s_uart_dev[uart_id].rx_fifo,
+               (const uint8_t *)&(s_uart_dev[uart_id].dmarx_buf[s_uart_dev[uart_id].last_dmarx_size]), recv_size);
+    s_uart_dev[uart_id].last_dmarx_size = recv_total_size;
+}
+
+/**
+ * @brief  ´®¿Údma·¢ËÍÍê³ÉÖÐ¶Ï´¦??
+ * @param
+ * @retval
+ */
+void uart_dmatx_done_isr(uint8_t uart_id)
+{
+    s_uart_dev[uart_id].status = 0;
+}
+
+/**
+ * @brief  Ñ­»·´Ó´®¿Ú·¢ËÍfifo¶Á³öÊý¾Ý£¬·ÅÖÃÓÚdma·¢ËÍ»º´æ£¬²¢Æô¶¯dma´«Êä
+ * @param
+ * @retval
+ */
+void uart_poll_dma_tx(uint8_t uart_id)
+{
+    uint16_t size = 0;
+    if (0x01 == s_uart_dev[uart_id].status)
+    {
+        return;
+    }
+
+    if (huart1.gState != HAL_UART_STATE_READY)
+    {
+        return;
+    }
+
+    size = fifo_read(&s_uart_dev[uart_id].tx_fifo, s_uart_dev[uart_id].dmatx_buf,
+                     s_uart_dev[uart_id].dmatx_buf_size);
+
+    if (size != 0)
+    {
+        s_UartTxRxCount[uart_id * 2 + 0] += size;
+        s_uart_dev[uart_id].status = 0x01; /* DMA·¢ËÍ×´Ì¬ */
+        uint8_t ret = HAL_UART_Transmit_DMA(&huart1,
+                                            s_uart_dev[uart_id].dmatx_buf,
+                                            size);
+        if (ret != HAL_OK)
+        {
+            s_uart_dev[uart_id].status = 0x00;
+            (void)fifo_write(&s_uart_dev[uart_id].tx_fifo,
+                             s_uart_dev[uart_id].dmatx_buf,
+                             size);
+        }
+    }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        s_uart_dev[0].status = 0x00;
+        uart_poll_dma_tx(0);
     }
 }
 

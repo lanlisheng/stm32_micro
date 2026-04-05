@@ -10,6 +10,7 @@
 "test_micro\stm32h7xx_it.o"
 "test_micro\stm32h7xx_hal_msp.o"
 "test_micro\stm32h7xx_hal_timebase_tim.o"
+"test_micro\fifo.o"
 "test_micro\stm32h7xx_hal_cortex.o"
 "test_micro\stm32h7xx_hal_rcc.o"
 "test_micro\stm32h7xx_hal_rcc_ex.o"

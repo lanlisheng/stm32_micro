@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usart.h"
+#include "rtt_log.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -107,7 +108,7 @@ void MX_FREERTOS_Init(void)
 
     /* Create the thread(s) */
     /* definition and creation of defaultTask */
-    osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+    osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 512);
     defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
     /* definition and creation of debugTask */
@@ -129,9 +130,33 @@ void MX_FREERTOS_Init(void)
 void StartDefaultTask(void const *argument)
 {
     /* USER CODE BEGIN StartDefaultTask */
+    static uint32_t s_count = 0;
+    uint16_t size = 0;
+    uint8_t buf[1024];
     /* Infinite loop */
     for (;;)
     {
+        s_count++;
+
+        // if ((s_count % 50000) == 0)
+        // {
+        /* 串口数据回环测试 */
+        size = uart_read(0, buf, sizeof(buf));
+
+        if (size > 0)
+        {
+            uart_write(0, buf, size);
+            // RTT_LogPrintf("uart read size: %u\r\n", size);
+            // for (int i = 0; i < size; i++)
+            // {
+            //     RTT_LogPrintf("%02X ", buf[i]);
+            // }
+            uart_poll_dma_tx(0);
+        }
+
+        /* 将fifo数据拷贝到dma buf，并启动dma传输 */
+
+        // }
         // USART1_Process();
         osDelay(1);
     }
@@ -153,7 +178,7 @@ void StartdebugTask(void const *argument)
 
     for (;;)
     {
-        USART1_CpuMonitorTask();
+        // USART1_CpuMonitorTask();
 
         uint32_t now = HAL_GetTick();
         if ((now - stack_monitor_tick) >= 1000U)
