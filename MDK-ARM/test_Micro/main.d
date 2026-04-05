@@ -41,5 +41,6 @@ test_micro/main.o: ..\Core\Src\main.c ..\Core\Inc\main.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\include\queue.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\include\semphr.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\include\event_groups.h \
-  ..\Core\Inc\gpio.h ..\Core\Inc\usart.h ..\Core\Inc\rtt_log.h \
-  ..\RTT\SEGGER_RTT.h ..\RTT\SEGGER_RTT_Conf.h
+  ..\Core\Inc\dma.h ..\Core\Inc\memorymap.h ..\Core\Inc\usart.h \
+  ..\Core\Inc\gpio.h ..\Core\Inc\rtt_log.h ..\RTT\SEGGER_RTT.h \
+  ..\RTT\SEGGER_RTT_Conf.h

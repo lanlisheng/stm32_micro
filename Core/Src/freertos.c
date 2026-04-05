@@ -19,11 +19,9 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
-#include "cmsis_os.h"
-#include "main.h"
-#include "rtt_log.h"
 #include "task.h"
-#include <stdint.h>
+#include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -60,53 +58,10 @@ osThreadId debugTaskHandle;
 void StartDefaultTask(void const *argument);
 void StartdebugTask(void const *argument);
 
-static void LogSystemHeapInfo(void) {
-  size_t freeHeap = xPortGetFreeHeapSize();
-  size_t minEverFreeHeap = xPortGetMinimumEverFreeHeapSize();
-
-  RTT_LogPrintf("[HEAP] free %uB, min ever free %uB\r\n", (unsigned)freeHeap,
-                (unsigned)minEverFreeHeap);
-}
-
-static void MonitorAllTaskStackUsage(void) {
-  UBaseType_t taskCount = uxTaskGetNumberOfTasks();
-
-  if (taskCount == 0U) {
-    return;
-  }
-
-  TaskStatus_t *taskStatusArray =
-      pvPortMalloc(taskCount * sizeof(TaskStatus_t));
-
-  if (taskStatusArray == NULL) {
-    return;
-  }
-
-  taskCount = uxTaskGetSystemState(taskStatusArray, taskCount, NULL);
-
-  for (UBaseType_t i = 0; i < taskCount; ++i) {
-    configSTACK_DEPTH_TYPE highWaterMark =
-        taskStatusArray[i].usStackHighWaterMark;
-    unsigned freeBytes = (unsigned)(highWaterMark * sizeof(StackType_t));
-
-    RTT_LogPrintf("[STACK] %s historical unused %uW/%uB\r\n",
-                  taskStatusArray[i].pcTaskName, (unsigned)highWaterMark,
-                  freeBytes);
-
-    if (highWaterMark == 0U) {
-      RTT_LogPrintf("[STACK-OVERFLOW] %s\r\n", taskStatusArray[i].pcTaskName);
-    }
-  }
-
-  vPortFree(taskStatusArray);
-}
-
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /* GetIdleTaskMemory prototype (linked to static allocation support) */
-void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
-                                   StackType_t **ppxIdleTaskStackBuffer,
-                                   uint32_t *pulIdleTaskStackSize);
+void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize);
 
 /* USER CODE BEGIN GET_IDLE_TASK_MEMORY */
 static StaticTask_t xIdleTaskTCBBuffer;
@@ -114,11 +69,12 @@ static StackType_t xIdleStack[configMINIMAL_STACK_SIZE];
 
 void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
                                    StackType_t **ppxIdleTaskStackBuffer,
-                                   uint32_t *pulIdleTaskStackSize) {
-  *ppxIdleTaskTCBBuffer = &xIdleTaskTCBBuffer;
-  *ppxIdleTaskStackBuffer = &xIdleStack[0];
-  *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
-  /* place for user code */
+                                   uint32_t *pulIdleTaskStackSize)
+{
+    *ppxIdleTaskTCBBuffer = &xIdleTaskTCBBuffer;
+    *ppxIdleTaskStackBuffer = &xIdleStack[0];
+    *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+    /* place for user code */
 }
 /* USER CODE END GET_IDLE_TASK_MEMORY */
 
@@ -127,39 +83,40 @@ void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
  * @param  None
  * @retval None
  */
-void MX_FREERTOS_Init(void) {
-  /* USER CODE BEGIN Init */
+void MX_FREERTOS_Init(void)
+{
+    /* USER CODE BEGIN Init */
 
-  /* USER CODE END Init */
+    /* USER CODE END Init */
 
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
+    /* USER CODE BEGIN RTOS_MUTEX */
+    /* add mutexes, ... */
+    /* USER CODE END RTOS_MUTEX */
 
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
+    /* USER CODE BEGIN RTOS_SEMAPHORES */
+    /* add semaphores, ... */
+    /* USER CODE END RTOS_SEMAPHORES */
 
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
+    /* USER CODE BEGIN RTOS_TIMERS */
+    /* start timers, add new ones, ... */
+    /* USER CODE END RTOS_TIMERS */
 
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
+    /* USER CODE BEGIN RTOS_QUEUES */
+    /* add queues, ... */
+    /* USER CODE END RTOS_QUEUES */
 
-  /* Create the thread(s) */
-  /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
-  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+    /* Create the thread(s) */
+    /* definition and creation of defaultTask */
+    osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+    defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
-  /* definition and creation of debugTask */
-  osThreadDef(debugTask, StartdebugTask, osPriorityIdle, 0, 256);
-  debugTaskHandle = osThreadCreate(osThread(debugTask), NULL);
+    /* definition and creation of debugTask */
+    osThreadDef(debugTask, StartdebugTask, osPriorityIdle, 0, 128);
+    debugTaskHandle = osThreadCreate(osThread(debugTask), NULL);
 
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
+    /* USER CODE BEGIN RTOS_THREADS */
+    /* add threads, ... */
+    /* USER CODE END RTOS_THREADS */
 }
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -169,14 +126,16 @@ void MX_FREERTOS_Init(void) {
  * @retval None
  */
 /* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void const *argument) {
-  /* USER CODE BEGIN StartDefaultTask */
-  /* Infinite loop */
-  for (;;) {
-    USART1_Process();
-    osDelay(1);
-  }
-  /* USER CODE END StartDefaultTask */
+void StartDefaultTask(void const *argument)
+{
+    /* USER CODE BEGIN StartDefaultTask */
+    /* Infinite loop */
+    for (;;)
+    {
+        // USART1_Process();
+        osDelay(1);
+    }
+    /* USER CODE END StartDefaultTask */
 }
 
 /* USER CODE BEGIN Header_StartdebugTask */
@@ -186,24 +145,27 @@ void StartDefaultTask(void const *argument) {
  * @retval None
  */
 /* USER CODE END Header_StartdebugTask */
-void StartdebugTask(void const *argument) {
-  /* USER CODE BEGIN StartdebugTask */
-  /* Infinite loop */
-  static uint32_t stack_monitor_tick = 0U;
+void StartdebugTask(void const *argument)
+{
+    /* USER CODE BEGIN StartdebugTask */
+    /* Infinite loop */
+    static uint32_t stack_monitor_tick = 0U;
 
-  for (;;) {
-    USART1_CpuMonitorTask();
+    for (;;)
+    {
+        USART1_CpuMonitorTask();
 
-    uint32_t now = HAL_GetTick();
-    if ((now - stack_monitor_tick) >= 1000U) {
-      stack_monitor_tick = now;
-      MonitorAllTaskStackUsage();
-      LogSystemHeapInfo();
+        uint32_t now = HAL_GetTick();
+        if ((now - stack_monitor_tick) >= 1000U)
+        {
+            stack_monitor_tick = now;
+            //   MonitorAllTaskStackUsage();
+            //   LogSystemHeapInfo();
+        }
+
+        osDelay(1);
     }
-
-    osDelay(1);
-  }
-  /* USER CODE END StartdebugTask */
+    /* USER CODE END StartdebugTask */
 }
 
 /* Private application code --------------------------------------------------*/
