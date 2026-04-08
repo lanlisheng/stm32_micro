@@ -1,0 +1,36 @@
+# Generic build outputs
+*.exe
+*.out
+*.app
+*.o
+*.obj
+*.ilk
+*.pdb
+*.idb
+*.sdf
+*.suo
+*.log
+*.tmp
+
+# Generic build directories
+build/
+bin/
+obj/
+Debug/
+Release/
+x64/
+x86/
+
+# Editor and OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Keil MDK user state
+MDK-ARM/*.uvguix.*
+
+# Keil MDK generated outputs
+MDK-ARM/*.map
+MDK-ARM/test_Micro/
